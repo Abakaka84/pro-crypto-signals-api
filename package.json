@@ -1,7 +1,7 @@
 {
   "name": "pro-crypto-signals-api",
   "version": "1.0.0",
-  "description": "Professional Crypto Trading Signals API",
+  "description": "Professional Crypto Signals API",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
