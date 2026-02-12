@@ -4,36 +4,41 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(express.json());
+
+// ================================
 // الصفحة الرئيسية
+// ================================
 app.get("/", (req, res) => {
   res.json({
     status: "Pro Crypto Signals API Running",
     endpoints: {
-      price: "/price?symbol=BTCUSDT",
-      signal: "/signal?symbol=BTCUSDT"
+      price: "/price?symbol=bitcoin",
+      signal: "/signal?symbol=bitcoin"
     }
   });
 });
 
-// ===============================
-// جلب بيانات الشموع لحساب RSI
-// ===============================
-async function getKlines(symbol) {
+// ================================
+// جلب بيانات تاريخية لحساب RSI
+// ================================
+async function getHistoricalPrices(coin) {
   const response = await axios.get(
-    `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=50`
+    `https://api.coingecko.com/api/v3/coins/${coin}/market_chart?vs_currency=usd&days=2`
   );
-  return response.data;
+
+  return response.data.prices.map(p => p[1]);
 }
 
-// ===============================
+// ================================
 // حساب RSI
-// ===============================
-function calculateRSI(closes, period = 14) {
+// ================================
+function calculateRSI(prices, period = 14) {
   let gains = 0;
   let losses = 0;
 
-  for (let i = closes.length - period; i < closes.length - 1; i++) {
-    const diff = closes[i + 1] - closes[i];
+  for (let i = prices.length - period; i < prices.length - 1; i++) {
+    const diff = prices[i + 1] - prices[i];
     if (diff >= 0) gains += diff;
     else losses += Math.abs(diff);
   }
@@ -47,44 +52,57 @@ function calculateRSI(closes, period = 14) {
   return 100 - (100 / (1 + rs));
 }
 
-// ===============================
-// السعر المباشر
-// ===============================
+// ================================
+// PRICE ENDPOINT
+// ================================
 app.get("/price", async (req, res) => {
   try {
-    const symbol = req.query.symbol || "BTCUSDT";
+    const symbol = req.query.symbol || "bitcoin";
 
     const response = await axios.get(
-      `https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`
+      `https://api.coingecko.com/api/v3/simple/price?ids=${symbol}&vs_currencies=usd`
     );
 
+    if (!response.data[symbol]) {
+      return res.status(400).json({
+        error: "Invalid coin ID. Example: bitcoin, ethereum, ripple"
+      });
+    }
+
     res.json({
-      symbol: symbol,
-      price: parseFloat(response.data.price)
+      coin: symbol,
+      price_usd: response.data[symbol].usd
     });
 
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch price" });
+    console.error("PRICE ERROR:", error.message);
+    res.status(500).json({
+      error: "Failed to fetch price",
+      details: error.message
+    });
   }
 });
 
-// ===============================
-// إشارة احترافية
-// ===============================
+// ================================
+// SIGNAL ENDPOINT
+// ================================
 app.get("/signal", async (req, res) => {
   try {
-    const symbol = req.query.symbol || "BTCUSDT";
+    const symbol = req.query.symbol || "bitcoin";
 
-    const klines = await getKlines(symbol);
+    const prices = await getHistoricalPrices(symbol);
 
-    const closes = klines.map(k => parseFloat(k[4]));
+    if (!prices || prices.length < 20) {
+      return res.status(400).json({
+        error: "Not enough data for signal"
+      });
+    }
 
-    const rsi = calculateRSI(closes);
-
-    const lastPrice = closes[closes.length - 1];
+    const rsi = calculateRSI(prices);
+    const lastPrice = prices[prices.length - 1];
 
     const ma =
-      closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+      prices.slice(-20).reduce((a, b) => a + b, 0) / 20;
 
     let signal = "HOLD";
 
@@ -92,18 +110,23 @@ app.get("/signal", async (req, res) => {
     else if (rsi > 70 && lastPrice < ma) signal = "SELL";
 
     res.json({
-      symbol: symbol,
-      price: lastPrice,
+      coin: symbol,
+      price_usd: lastPrice,
       RSI: rsi.toFixed(2),
       movingAverage: ma.toFixed(2),
       signal: signal
     });
 
   } catch (error) {
-    res.status(500).json({ error: "Signal generation failed" });
+    console.error("SIGNAL ERROR:", error.message);
+    res.status(500).json({
+      error: "Signal generation failed",
+      details: error.message
+    });
   }
 });
 
+// ================================
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
