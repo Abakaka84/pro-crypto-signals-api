@@ -1,4 +1,5 @@
 const express = require("express");
+const axios = require("axios");
 const cors = require("cors");
 
 const app = express();
@@ -7,23 +8,66 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-/*
-  Root Route
-*/
+const SUPPORTED_COINS = ["BTC", "ETH", "BNB", "SOL", "XRP"];
+
+/* ===============================
+   Utility Functions
+=================================*/
+
+// Get Candles
+async function getCandles(symbol) {
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=1h&limit=100`;
+  const response = await axios.get(url);
+  return response.data.map(candle => parseFloat(candle[4]));
+}
+
+// Calculate EMA
+function calculateEMA(prices, period = 20) {
+  const k = 2 / (period + 1);
+  let ema = prices[0];
+
+  for (let i = 1; i < prices.length; i++) {
+    ema = prices[i] * k + ema * (1 - k);
+  }
+
+  return ema;
+}
+
+// Calculate RSI
+function calculateRSI(prices, period = 14) {
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = 1; i <= period; i++) {
+    const diff = prices[i] - prices[i - 1];
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
+  }
+
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+
+  if (avgLoss === 0) return 100;
+
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+/* ===============================
+   Routes
+=================================*/
+
 app.get("/", (req, res) => {
   res.json({
-    status: "API is running",
+    status: "Pro Crypto Signals API v2 Running",
+    supportedCoins: SUPPORTED_COINS,
     endpoints: {
-      price: "/price?coin=BTC",
       signal: "/signal?coin=BTC"
     }
   });
 });
 
-/*
-  Price Endpoint
-*/
-app.get("/price", (req, res) => {
+app.get("/signal", async (req, res) => {
   try {
     const { coin } = req.query;
 
@@ -31,53 +75,59 @@ app.get("/price", (req, res) => {
       return res.status(400).json({ error: "Coin is required" });
     }
 
-    const upperCoin = coin.toUpperCase();
+    const symbol = coin.toUpperCase();
 
-    // سعر وهمي للتجربة
-    const price = Math.floor(Math.random() * 50000) + 10000;
-
-    res.json({
-      coin: upperCoin,
-      price: price
-    });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Price fetch failed" });
-  }
-});
-
-/*
-  Signal Endpoint
-*/
-app.get("/signal", (req, res) => {
-  try {
-    const { coin } = req.query;
-
-    if (!coin) {
-      return res.status(400).json({ error: "Coin is required" });
+    if (!SUPPORTED_COINS.includes(symbol)) {
+      return res.status(400).json({
+        error: "Unsupported coin",
+        supportedCoins: SUPPORTED_COINS
+      });
     }
 
-    const upperCoin = coin.toUpperCase();
+    const prices = await getCandles(symbol);
 
-    const price = Math.floor(Math.random() * 50000) + 10000;
+    const currentPrice = prices[prices.length - 1];
+    const ema20 = calculateEMA(prices, 20);
+    const rsi14 = calculateRSI(prices, 14);
 
     let signal = "HOLD";
 
-    if (price < 20000) {
+    if (currentPrice > ema20 && rsi14 < 70) {
       signal = "BUY";
-    } else if (price > 40000) {
+    } else if (currentPrice < ema20 && rsi14 > 30) {
       signal = "SELL";
     }
 
+    const takeProfit =
+      signal === "BUY"
+        ? currentPrice * 1.02
+        : signal === "SELL"
+        ? currentPrice * 0.98
+        : null;
+
+    const stopLoss =
+      signal === "BUY"
+        ? currentPrice * 0.98
+        : signal === "SELL"
+        ? currentPrice * 1.02
+        : null;
+
     res.json({
-      coin: upperCoin,
-      price: price,
-      signal: signal
+      coin: symbol,
+      price: currentPrice,
+      indicators: {
+        ema20: ema20,
+        rsi14: rsi14.toFixed(2)
+      },
+      signal: signal,
+      riskManagement: {
+        takeProfit: takeProfit,
+        stopLoss: stopLoss
+      }
     });
 
-  } catch (error) {
-    console.error(error);
+  } catch (err) {
+    console.error(err.message);
     res.status(500).json({ error: "Signal generation failed" });
   }
 });
